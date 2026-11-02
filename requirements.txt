@@ -1,0 +1,5 @@
+requests>=2.31
+pypdf>=4.0
+# curl_cffi: necessario per impersonare il fingerprint TLS del browser.
+# La WAF di Spaggiari (Akamai) risponde 403 a curl/requests "nudi".
+curl_cffi>=0.17
