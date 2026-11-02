@@ -43,6 +43,17 @@ def _md_escape(text: str) -> str:
     return text
 
 
+def format_message(title: str, date_str: str, category: str, summary: str) -> str:
+    """Compone il messaggio Telegram: data, poi titolo, poi categoria (una riga ciascuna)."""
+    lines = []
+    if date_str:
+        lines.append(f"📅 {date_str}")
+    lines.append(f"*{_md_escape(title)}*")
+    if category:
+        lines.append(f"Categoria: {_md_escape(category)}")
+    return "\n".join(lines) + f"\n\n{summary}\n"
+
+
 def is_recent(item: dict, days: int) -> bool:
     raw = item.get("pubDT") or ""
     try:
@@ -53,6 +64,11 @@ def is_recent(item: dict, days: int) -> bool:
     if pub_dt.tzinfo is None:
         pub_dt = pub_dt.replace(tzinfo=timezone.utc)
     return pub_dt >= datetime.now(timezone.utc) - timedelta(days=days)
+
+
+def sort_notices(items: list[dict]) -> list[dict]:
+    """Ordina gli avvisi dal più vecchio al più recente (pubDT)."""
+    return sorted(items, key=lambda it: it.get("pubDT") or "")
 
 
 def process_notice(
@@ -98,11 +114,7 @@ def process_notice(
             notice_date=date_str, category=item.get("cntCategory") or "",
         )
 
-        message = (
-            f"*{_md_escape(title)}*\n"
-            f"📅 {date_str}  •  categoria: {_md_escape(item.get('cntCategory') or '-')}\n"
-            f"\n{summary}\n"
-        )
+        message = format_message(title, date_str, item.get("cntCategory") or "", summary)
 
         # 4) Invio Telegram (saltato in dry-run)
         if dry_run:
@@ -161,7 +173,8 @@ def main() -> int:
 
     try:
         client.login()
-        items = client.get_noticeboard()
+        # Elaborazione in ordine cronologico: dai messaggi più vecchi ai più recenti
+        items = sort_notices(client.get_noticeboard())
     except ClasseVivaError as exc:
         log.error("❌ Errore ClasseViva: %s", exc)
         return 1

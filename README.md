@@ -21,7 +21,8 @@ login → elenco bacheca → filtro avvisi nuovi → [lettura corpo*] → downlo
 
 Lo stato locale (SQLite in `data/state.db`) ricorda quali avvisi sono già stati
 inviati: ogni esecuzione processa **solo le novità**, e gli avvisi falliti
-vengono ritentati alla successiva.
+vengono ritentati alla successiva. L'elaborazione segue l'ordine cronologico:
+dai messaggi più vecchi ai più recenti.
 
 ## Requisiti
 

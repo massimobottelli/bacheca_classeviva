@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 from src.config import Config, ConfigError, load_config
-from src.main import _md_escape, is_recent, process_notice
+from src.main import _md_escape, format_message, is_recent, process_notice, sort_notices
 from src.state import StateStore
 from src.summarizer import _extract_summary, summarize_notice
 
@@ -22,8 +22,9 @@ from src.summarizer import _extract_summary, summarize_notice
 # i fixture temporanei (os.environ ha priorità sul file .env).
 CONFIG_KEYS = (
     "CV_UID", "CV_PASSWORD", "CV_CID", "CV_PIN", "MARK_AS_READ",
-    "TG_BOT_TOKEN", "TG_CHAT_ID", "LLM_API_URL", "LLM_API_KEY",
-    "LLM_MODEL", "BACKFILL_DAYS", "REQUEST_DELAY",
+    "TG_BOT_TOKEN", "TG_CHAT_ID", "SEND_ATTACHMENTS",
+    "LLM_API_URL", "LLM_API_KEY", "LLM_MODEL",
+    "BACKFILL_DAYS", "REQUEST_DELAY",
 )
 
 
@@ -222,6 +223,47 @@ class SummarizerTest(unittest.TestCase):
         self.assertIn("2026-02-10", out)
 
 
+class SortNoticesTest(unittest.TestCase):
+    """L'elaborazione deve andare dai messaggi più vecchi ai più recenti."""
+
+    def test_sorts_oldest_first(self) -> None:
+        items = [
+            {"pubId": 3, "pubDT": "2026-11-01T09:00:00"},
+            {"pubId": 1, "pubDT": "2026-10-20T08:00:00"},
+            {"pubId": 2, "pubDT": "2026-10-29T10:00:00"},
+        ]
+        sorted_items = sort_notices(items)
+        self.assertEqual([it["pubId"] for it in sorted_items], [1, 2, 3])
+
+    def test_missing_date_first_and_input_untouched(self) -> None:
+        items = [
+            {"pubId": 9, "pubDT": "2026-11-01T09:00:00"},
+            {"pubId": 8},
+        ]
+        sorted_items = sort_notices(items)
+        self.assertEqual([it["pubId"] for it in sorted_items], [8, 9])
+        self.assertEqual([it["pubId"] for it in items], [9, 8])  # originale invariata
+
+
+class FormatMessageTest(unittest.TestCase):
+    """Il messaggio Telegram deve avere ordine: data, poi titolo, poi categoria."""
+
+    def test_order_date_title_category(self) -> None:
+        msg = format_message("Titolo X", "2026-10-29", "Circolari", "sintesi")
+        i_date = msg.index("📅")
+        i_title = msg.index("*Titolo X*")
+        i_category = msg.index("Categoria:")
+        self.assertLess(i_date, i_title)
+        self.assertLess(i_title, i_category)
+
+    def test_omits_empty_date_and_category(self) -> None:
+        msg = format_message("Titolo Y", "", "", "sintesi")
+        self.assertNotIn("📅", msg)
+        self.assertNotIn("Categoria:", msg)
+        self.assertIn("*Titolo Y*", msg)
+        self.assertIn("sintesi", msg)
+
+
 class ProcessNoticeTest(unittest.TestCase):
     """Gli allegati scaricati devono essere sempre rimossi dal disco a fine uso."""
 
@@ -293,6 +335,12 @@ class ProcessNoticeTest(unittest.TestCase):
         send_msg.assert_called_once()
         send_doc.assert_not_called()
         self.assertEqual(list(self.att_dir.iterdir()), [])
+
+    def test_message_order_date_title_category(self) -> None:
+        send_msg, _ = self._process(self._cfg(True), dry_run=False)
+        text = send_msg.call_args.args[2]
+        self.assertLess(text.index("📅"), text.index("*Circolare test*"))
+        self.assertLess(text.index("*Circolare test*"), text.index("Categoria: Gite"))
 
     def test_exception_still_removes_attachments(self) -> None:
         with self.assertRaises(RuntimeError):
