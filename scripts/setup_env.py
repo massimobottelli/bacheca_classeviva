@@ -62,6 +62,12 @@ def main() -> int:
     print("Avvia una chat con il tuo bot (comando /start), poi scopri la chat_id con:")
     print(f"  https://api.telegram.org/bot{tg_token}/getUpdates")
     tg_chat = ask("Chat ID (TG_CHAT_ID)", required=True)
+    send_attachments = ask(
+        "Inviare i PDF come documenti su Telegram? (SEND_ATTACHMENTS) [true]"
+    ).lower() or "true"
+    while send_attachments not in ("true", "false", "1", "0", "yes", "si", "sì", "no", "on", "off"):
+        print("  ⚠  Valori ammessi: true / false")
+        send_attachments = ask("SEND_ATTACHMENTS [true]").lower() or "true"
 
     print("\n── Sintesi LLM (opzionale, INVIO per saltare) ──")
     print("Endpoint compatibile OpenAI chat/completions.")
@@ -88,6 +94,7 @@ MARK_AS_READ={mark_as_read}
 # ── Telegram ──
 TG_BOT_TOKEN={tg_token}
 TG_CHAT_ID={tg_chat}
+SEND_ATTACHMENTS={send_attachments}
 
 # ── Sintesi LLM (opzionale) ──
 LLM_API_URL={llm_url}

@@ -148,10 +148,15 @@ class ClasseVivaClient:
             counter += 1
 
         size = 0
-        with open(dest, "wb") as fh:
-            for chunk in resp.iter_content(chunk_size=65536):
-                fh.write(chunk)
-                size += len(chunk)
+        try:
+            with open(dest, "wb") as fh:
+                for chunk in resp.iter_content(chunk_size=65536):
+                    fh.write(chunk)
+                    size += len(chunk)
+        except Exception:
+            # Nessun parziale sulla cache: il file incompleto va rimosso
+            dest.unlink(missing_ok=True)
+            raise
         log.info("💾 Salvato %s (%d byte)", dest, size)
         return dest
 

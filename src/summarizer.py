@@ -49,12 +49,14 @@ def summarize_notice(
     come contesto per la sintesi (opzionali).
     """
     # Composizione del documento da sintetizzare
-    header = f"Titolo: {title}"
+    # Intestazione: data, poi titolo, poi categoria (uno per riga)
+    lines = []
     if notice_date:
-        header += f"\nData della comunicazione: {notice_date}"
+        lines.append(f"Data della comunicazione: {notice_date}")
+    lines.append(f"Titolo: {title}")
     if category:
-        header += f"\nCategoria: {category}"
-    parts = [header]
+        lines.append(f"Categoria: {category}")
+    parts = ["\n".join(lines)]
     if notice_text.strip():
         parts.append(f"Testo della comunicazione:\n{notice_text.strip()}")
     for name, text in attachment_texts:

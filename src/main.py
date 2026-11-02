@@ -77,40 +77,52 @@ def process_notice(
     else:
         log.info("🚫 MARK_AS_READ=false: salto la lettura del corpo (non segno come letto)")
 
-    # 2) Allegati: download + estrazione testo
+    # 2) Allegati: download + estrazione testo (rimossi dal disco a fine elaborazione)
     attachment_texts: list[tuple[str, str]] = []
     downloaded: list = []
-    for att in item.get("attachments") or []:
-        attach_num = att.get("attachNum")
-        if attach_num is None:
-            continue
-        try:
-            path = client.download_attachment(evt_code, pub_id, attach_num, ATTACHMENTS_DIR)
-            downloaded.append(path)
-            attachment_texts.append((path.name, extract_pdf_text(path)))
-        except Exception as exc:
-            log.error("❌ Allegato n.%s di pubId=%s non scaricato: %s", attach_num, pub_id, exc)
+    try:
+        for att in item.get("attachments") or []:
+            attach_num = att.get("attachNum")
+            if attach_num is None:
+                continue
+            try:
+                path = client.download_attachment(evt_code, pub_id, attach_num, ATTACHMENTS_DIR)
+                downloaded.append(path)
+                attachment_texts.append((path.name, extract_pdf_text(path)))
+            except Exception as exc:
+                log.error("❌ Allegato n.%s di pubId=%s non scaricato: %s", attach_num, pub_id, exc)
 
-    # 3) Sintesi
-    summary = summarize_notice(
-        title, notice_text, attachment_texts, cfg,
-        notice_date=date_str, category=item.get("cntCategory") or "",
-    )
+        # 3) Sintesi
+        summary = summarize_notice(
+            title, notice_text, attachment_texts, cfg,
+            notice_date=date_str, category=item.get("cntCategory") or "",
+        )
 
-    message = (
-        f"*{_md_escape(title)}*\n"
-        f"📅 {date_str}  •  categoria: {_md_escape(item.get('cntCategory') or '-')}\n"
-        f"\n{summary}\n"
-    )
+        message = (
+            f"*{_md_escape(title)}*\n"
+            f"📅 {date_str}  •  categoria: {_md_escape(item.get('cntCategory') or '-')}\n"
+            f"\n{summary}\n"
+        )
 
-    # 4) Invio Telegram (saltato in dry-run)
-    if dry_run:
-        log.info("🏃 DRY-RUN: salto invio Telegram. Messaggio che sarebbe stato inviato:\n%s", message)
-        return
+        # 4) Invio Telegram (saltato in dry-run)
+        if dry_run:
+            log.info("🏃 DRY-RUN: salto invio Telegram. Messaggio che sarebbe stato inviato:\n%s", message)
+            return
 
-    send_message(cfg.tg_bot_token, cfg.tg_chat_id, message)
-    for path in downloaded:
-        send_document(cfg.tg_bot_token, cfg.tg_chat_id, path, caption=_md_escape(title)[:200])
+        send_message(cfg.tg_bot_token, cfg.tg_chat_id, message)
+        if cfg.send_attachments:
+            for path in downloaded:
+                send_document(cfg.tg_bot_token, cfg.tg_chat_id, path, caption=_md_escape(title)[:200])
+        else:
+            log.info("📎 SEND_ATTACHMENTS=false: allegati non inviati su Telegram")
+    finally:
+        # Cache sempre pulita: gli allegati servono solo per l'elaborazione
+        for path in downloaded:
+            try:
+                path.unlink(missing_ok=True)
+                log.info("🗑️  Rimosso allegato temporaneo %s", path.name)
+            except OSError as exc:
+                log.warning("⚠️  Non riesco a rimuovere %s: %s", path, exc)
 
 
 def main() -> int:
@@ -189,6 +201,12 @@ def main() -> int:
             except Exception as exc:
                 failed += 1
                 log.exception("❌ pubId=%s: errore imprevisto (NON marcato, verrà ritentato): %s", pub_id, exc)
+
+    # Pulizia finale: rimuove eventuali allegati orfani (es. run interrotte)
+    for path in ATTACHMENTS_DIR.glob("*"):
+        if path.is_file():
+            path.unlink(missing_ok=True)
+            log.info("🗑️  Rimosso allegato orfano %s", path.name)
 
     log.info("🏁 FINE — processati=%d  saltati=%d  falliti=%d", processed, skipped, failed)
     return 1 if failed else 0

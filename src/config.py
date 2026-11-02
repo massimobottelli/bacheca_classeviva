@@ -49,6 +49,7 @@ class Config:
     # Telegram
     tg_bot_token: str
     tg_chat_id: str
+    send_attachments: bool
     # LLM
     llm_api_url: str
     llm_api_key: str
@@ -94,6 +95,8 @@ def load_config(env_file: Path = ENV_FILE) -> Config:
         mark_as_read=_get_bool(values, "MARK_AS_READ", False),
         tg_bot_token=_get(values, "TG_BOT_TOKEN"),
         tg_chat_id=_get(values, "TG_CHAT_ID"),
+        # Default TRUE: invia i PDF come documenti (poi sempre rimossi dal disco)
+        send_attachments=_get_bool(values, "SEND_ATTACHMENTS", True),
         llm_api_url=_normalize_llm_url(_get(values, "LLM_API_URL")),
         llm_api_key=_get(values, "LLM_API_KEY"),
         llm_model=_get(values, "LLM_MODEL"),

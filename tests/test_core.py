@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 from src.config import Config, ConfigError, load_config
-from src.main import _md_escape, is_recent
+from src.main import _md_escape, is_recent, process_notice
 from src.state import StateStore
 from src.summarizer import _extract_summary, summarize_notice
 
@@ -73,6 +73,20 @@ class ConfigTest(unittest.TestCase):
         )
         cfg = load_config(env)
         self.assertEqual(cfg.llm_api_url, "https://api.openai.com/v1/chat/completions")
+
+    def test_send_attachments_default_true(self) -> None:
+        env = self._write_env(
+            "CV_UID=u\nCV_PASSWORD=p\nTG_BOT_TOKEN=t\nTG_CHAT_ID=1\n"
+        )
+        cfg = load_config(env)
+        self.assertTrue(cfg.send_attachments)
+
+    def test_send_attachments_explicit_false(self) -> None:
+        env = self._write_env(
+            "CV_UID=u\nCV_PASSWORD=p\nTG_BOT_TOKEN=t\nTG_CHAT_ID=1\nSEND_ATTACHMENTS=false\n"
+        )
+        cfg = load_config(env)
+        self.assertFalse(cfg.send_attachments)
 
     def test_quoted_values_and_comments(self) -> None:
         env = self._write_env(
@@ -135,7 +149,7 @@ class SummarizerTest(unittest.TestCase):
         # Config senza LLM: summarize_notice usa la sintesi grezza (nessuna rete)
         return Config(
             cv_uid="u", cv_password="p", cv_cid="", cv_pin="", mark_as_read=False,
-            tg_bot_token="t", tg_chat_id="1",
+            tg_bot_token="t", tg_chat_id="1", send_attachments=True,
             llm_api_url="", llm_api_key="", llm_model="",
             backfill_days=7, request_delay=0.0,
         )
@@ -149,6 +163,17 @@ class SummarizerTest(unittest.TestCase):
         self.assertIn("2026-02-10", out)
         self.assertIn("Circolari", out)
 
+    def test_header_order_date_then_title_then_category(self) -> None:
+        out = summarize_notice(
+            "Titolo X", "", [], self._cfg_no_llm(),
+            notice_date="2026-02-10", category="Circolari",
+        )
+        i_date = out.index("Data della comunicazione:")
+        i_title = out.index("Titolo:")
+        i_category = out.index("Categoria:")
+        self.assertLess(i_date, i_title)
+        self.assertLess(i_title, i_category)
+
     def test_omits_empty_date_and_category(self) -> None:
         out = summarize_notice("Titolo Y", "", [], self._cfg_no_llm())
         self.assertNotIn("Data della comunicazione", out)
@@ -157,7 +182,7 @@ class SummarizerTest(unittest.TestCase):
     def _cfg_with_llm(self) -> Config:
         return Config(
             cv_uid="u", cv_password="p", cv_cid="", cv_pin="", mark_as_read=False,
-            tg_bot_token="t", tg_chat_id="1",
+            tg_bot_token="t", tg_chat_id="1", send_attachments=True,
             llm_api_url="https://example.test/v1/chat/completions",
             llm_api_key="k", llm_model="m",
             backfill_days=7, request_delay=0.0,
@@ -195,6 +220,85 @@ class SummarizerTest(unittest.TestCase):
         self.assertIn("Sintesi automatica non disponibile", out)
         self.assertIn("Titolo Z", out)
         self.assertIn("2026-02-10", out)
+
+
+class ProcessNoticeTest(unittest.TestCase):
+    """Gli allegati scaricati devono essere sempre rimossi dal disco a fine uso."""
+
+    def setUp(self) -> None:
+        self.att_dir = Path(tempfile.mkdtemp()) / "attachments"
+        self.att_dir.mkdir()
+        self.item = {
+            "pubId": 999,
+            "evtCode": "CF",
+            "cntTitle": "Circolare test",
+            "cntCategory": "Gite",
+            "pubDT": "2026-02-10T09:00:00",
+            "attachments": [{"attachNum": 1}],
+        }
+
+    def _cfg(self, send_attachments: bool) -> Config:
+        return Config(
+            cv_uid="u", cv_password="p", cv_cid="", cv_pin="", mark_as_read=False,
+            tg_bot_token="t", tg_chat_id="1", send_attachments=send_attachments,
+            llm_api_url="", llm_api_key="", llm_model="",
+            backfill_days=7, request_delay=0.0,
+        )
+
+    class _FakeClient:
+        """Crea file reali nella cartella allegati, come il client vero."""
+
+        def __init__(self, att_dir: Path) -> None:
+            self.att_dir = att_dir
+
+        def download_attachment(self, evt_code, pub_id, attach_num, dest_dir):
+            path = self.att_dir / f"avviso_{pub_id}_{attach_num}.pdf"
+            path.write_bytes(b"%PDF-1.4 fake")
+            return path
+
+    def _process(self, cfg, dry_run: bool = False, summarize_side_effect=None,
+                 send_document_impl=None):
+        client = self._FakeClient(self.att_dir)
+        with mock.patch("src.main.ATTACHMENTS_DIR", self.att_dir), \
+                mock.patch("src.main.extract_pdf_text", return_value="testo pdf"), \
+                mock.patch("src.main.summarize_notice", return_value="sintesi",
+                           side_effect=summarize_side_effect), \
+                mock.patch("src.main.send_message") as send_msg, \
+                mock.patch("src.main.send_document",
+                           side_effect=send_document_impl) as send_doc:
+            process_notice(client, self.item, cfg, None, dry_run)
+        return send_msg, send_doc
+
+    def test_dry_run_removes_attachments(self) -> None:
+        send_msg, send_doc = self._process(self._cfg(True), dry_run=True)
+        self.assertEqual(list(self.att_dir.iterdir()), [])
+        send_msg.assert_not_called()
+        send_doc.assert_not_called()
+
+    def test_send_true_sends_existing_file_then_removes(self) -> None:
+        existed_at_send: list[bool] = []
+
+        def fake_send(token, chat_id, path, caption=""):
+            existed_at_send.append(path.exists())
+
+        send_msg, send_doc = self._process(
+            self._cfg(True), dry_run=False, send_document_impl=fake_send)
+        self.assertEqual(existed_at_send, [True])  # il file esisteva al momento dell'invio
+        send_msg.assert_called_once()
+        send_doc.assert_called_once()
+        self.assertEqual(list(self.att_dir.iterdir()), [])  # …poi è stato rimosso
+
+    def test_send_false_skips_documents_but_removes(self) -> None:
+        send_msg, send_doc = self._process(self._cfg(False), dry_run=False)
+        send_msg.assert_called_once()
+        send_doc.assert_not_called()
+        self.assertEqual(list(self.att_dir.iterdir()), [])
+
+    def test_exception_still_removes_attachments(self) -> None:
+        with self.assertRaises(RuntimeError):
+            self._process(self._cfg(True), dry_run=False,
+                          summarize_side_effect=RuntimeError("boom"))
+        self.assertEqual(list(self.att_dir.iterdir()), [])
 
 
 if __name__ == "__main__":

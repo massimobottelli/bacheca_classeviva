@@ -71,6 +71,7 @@ cp .env.example .env
 | `MARK_AS_READ` | – | `true`/`false`, default **`false`** |
 | `TG_BOT_TOKEN` | ✅ | Token del bot Telegram |
 | `TG_CHAT_ID` | ✅ | Chat ID di destinazione |
+| `SEND_ATTACHMENTS` | – | Invia i PDF come documenti su Telegram, default **`true`** |
 | `LLM_API_URL` | – | Endpoint OpenAI-compatibile per la sintesi |
 | `LLM_API_KEY` | – | API key del servizio LLM |
 | `LLM_MODEL` | – | Nome del modello (es. `gpt-4o-mini`) |
@@ -87,6 +88,13 @@ Per non alterare lo stato della tua bacheca:
   la sintesi si basa su titolo, data, categoria e **testo degli allegati PDF**.
 - Con `MARK_AS_READ=true` l'agente recupera anche il corpo del messaggio
   (e segna l'avviso come letto).
+
+### 📎 Allegati PDF
+
+Gli allegati vengono scaricati, usati per estrarre il testo della sintesi e
+(con `SEND_ATTACHMENTS=true`, default) inviati su Telegram come documenti.
+Vengono poi **sempre rimossi dal disco**: `data/attachments` non si riempie
+nel tempo. Con `SEND_ATTACHMENTS=false` si invia solo il messaggio di testo.
 
 ### Bot Telegram
 
@@ -156,18 +164,31 @@ Codici di uscita: `0` tutto ok, `1` qualche avviso fallito (verrà ritentato),
 
 ## Esecuzione automatica (cron)
 
-Una volta verificato il funzionamento manuale, puoi automatizzarlo.
-Esempio: ogni giorno alle 08:00 su macOS/Linux:
+Una volta verificato il funzionamento manuale, puoi automatizzarlo con lo
+script `scripts/run_bacheca.sh`, pensato per cron: lock contro esecuzioni
+sovrapposte, log con rotazione in `logs/bacheca.log`, nessuna mail spuria.
 
 ```bash
 crontab -e
 ```
 
 ```cron
-0 8 * * * cd /Users/massimo/VSCode/bacheca_classeviva && .venv/bin/python -m src.main >> logs/cron.log 2>&1
+# Ogni giorno alle 08:00
+0 8 * * * /Users/massimo/VSCode/bacheca_classeviva/scripts/run_bacheca.sh
+
+# Con opzioni (es. storico più ampio)
+0 8 * * * /Users/massimo/VSCode/bacheca_classeviva/scripts/run_bacheca.sh --backfill-days 30
 ```
 
-Su macOS puoi usare anche `launchd` (plist in `~/Library/LaunchAgents/`).
+Lo script accetta gli stessi argomenti di `python3 -m src.main` e usa
+l'interprete di `.venv` se presente. Il log delle esecuzioni è in
+`logs/bacheca.log` (oltre 5 MB ruota in `bacheca.log.1`); l'ultimo run si
+controlla con `tail -f logs/bacheca.log`.
+
+> **macOS**: concedi a `/usr/sbin/cron` l'accesso completo ai file
+> (Impostazioni di Sistema → Privacy e Sicurezza → Accesso completo al disco),
+> altrimenti cron non potrà leggere il progetto. In alternativa usa `launchd`
+> (plist in `~/Library/LaunchAgents/`).
 
 ## Struttura del progetto
 
@@ -178,7 +199,8 @@ bacheca_classeviva/
 ├── scripts/
 │   ├── setup_mac.sh      # setup completo su macOS
 │   ├── setup_linux.sh    # setup completo su Linux
-│   └── setup_env.py      # configurazione guidata di .env
+│   ├── setup_env.py      # configurazione guidata di .env
+│   └── run_bacheca.sh    # avvio per cron (log + lock, da crontab)
 ├── src/
 │   ├── config.py         # lettura/validazione di .env
 │   ├── classeviva.py     # client API ClasseViva (login, bacheca, allegati)
@@ -187,7 +209,7 @@ bacheca_classeviva/
 │   ├── telegram.py       # invio messaggi/documenti su Telegram
 │   ├── state.py          # stato locale SQLite (avvisi già processati)
 │   └── main.py           # orchestrazione della pipeline + CLI
-├── data/                 # generato: stato + PDF scaricati (non committato)
+├── data/                 # generato: stato + allegati temporanei (rimossi dopo l'uso)
 └── logs/                 # generato: log di esecuzione (non committato)
 ```
 
